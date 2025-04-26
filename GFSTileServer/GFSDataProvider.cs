@@ -12,7 +12,7 @@ public class GFSLatestForecastCycleProvider
         await Task.CompletedTask;
         return new ForecastCycle
         {
-            Date =  new LocalDate(2025, 04, 25),
+            Date =  new LocalDate(2025, 04, 26),
             Interval = ForecastInterval._12,
         };
     }
@@ -66,9 +66,8 @@ public class GFSDataProvider(
     GFSLatestForecastCycleProvider forecastCycleProvider)
 {
     private static readonly LocalDatePattern Pattern = LocalDatePattern.CreateWithInvariantCulture("yyyyMMdd");
-    private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(1);
 
-    public async Task<Wind> Foo(
+    public async Task<Wind> GetWind(
         Instant instant,
         double latitude,
         double longitude,
@@ -88,7 +87,6 @@ public class GFSDataProvider(
 
         var url = $"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.{date}%2F{interval}%2Fatmos&file=gfs.t{interval}z.pgrb2.0p25.f{offset:000}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on";
 
-        Console.WriteLine(url);
         var data = await memoryCache.GetOrCreateAsync(
             url,
             async entry =>
@@ -101,14 +99,15 @@ public class GFSDataProvider(
 
                 using var reader = new NGrib.Grib2Reader(memoryStream);
                 var dataSets = reader.ReadAllDataSets().ToList();
+                Console.WriteLine(dataSets[0].Parameter?.Name);
                 Wind[] wind = reader.ReadDataSetValues(dataSets[0])
                     .Zip(reader.ReadDataSetValues(dataSets[1]))
                     .Select(i => new Wind
                     {
                         CoordinateA = i.First.Key,
                         CoordinateB = i.Second.Key,
-                        U = i.First.Value ?? 0,
-                        V = i.Second.Value ?? 0,
+                        V = i.First.Value ?? 0,
+                        U = i.Second.Value ?? 0,
                     })
                     .ToArray();
 
@@ -131,7 +130,6 @@ public class GFSDataProvider(
         var (px, py) = LatLonToPixel(latitude, longitude);
         var pIdx = py * 1440 + px;
 
-        Console.WriteLine($"lon {longitude}, lat {latitude}, pixelLon: {py}, pixelLat: {px}, index {pIdx}");
         return data.Wind[pIdx];
     }
 
@@ -151,8 +149,8 @@ public struct Wind
 {
     public required Coordinate CoordinateA { get; init; }
     public required Coordinate CoordinateB { get; init; }
-    public required float U { get; init; }
     public required float V { get; init; }
+    public required float U { get; init; }
 }
 
 public class GFSForecastData
