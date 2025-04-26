@@ -99,15 +99,14 @@ public class GFSDataProvider(
 
                 using var reader = new NGrib.Grib2Reader(memoryStream);
                 var dataSets = reader.ReadAllDataSets().ToList();
-                Console.WriteLine(dataSets[0].Parameter?.Name);
                 Wind[] wind = reader.ReadDataSetValues(dataSets[0])
                     .Zip(reader.ReadDataSetValues(dataSets[1]))
                     .Select(i => new Wind
                     {
                         CoordinateA = i.First.Key,
                         CoordinateB = i.Second.Key,
-                        V = i.First.Value ?? 0,
-                        U = i.Second.Value ?? 0,
+                        U = i.First.Value ?? 0,
+                        V = i.Second.Value ?? 0,
                     })
                     .ToArray();
 
