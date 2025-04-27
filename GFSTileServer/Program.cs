@@ -1,3 +1,4 @@
+using System.Net;
 using GFSTileServer;
 using NodaTime;
 
@@ -15,6 +16,20 @@ builder.Services.AddSingleton<GFSLatestForecastCycleProvider>();
 builder.Services.AddSingleton<GFSDataProvider>();
 
 var app = builder.Build();
+
+app.UseExceptionHandler(exceptionHandlerApp =>
+{
+    exceptionHandlerApp.Run(async context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+        await context.Response.WriteAsJsonAsync(new ErrorResponse()
+        {
+            StatusCode = HttpStatusCode.InternalServerError,
+            Message = "Internal server error."
+        });
+    });
+});
 
 app.UseRouting();
 

@@ -6,61 +6,6 @@ using NodaTime.Text;
 
 namespace GFSTileServer;
 
-public class GFSLatestForecastCycleProvider
-{
-    public async Task<ForecastCycle> GetLatestForecastCycle(CancellationToken cancellationToken)
-    {
-        await Task.CompletedTask;
-        return new ForecastCycle
-        {
-            Date =  new LocalDate(2025, 04, 26),
-            Interval = ForecastInterval._12,
-        };
-    }
-}
-
-public class ForecastCycle
-{
-    public required LocalDate Date { get; init; }
-    public required ForecastInterval Interval { get; init; }
-
-    public Instant ToInstant() => Date
-        .AtMidnight()
-        .PlusHours(Interval switch
-        {
-            ForecastInterval._00 => 0,
-            ForecastInterval._06 => 6,
-            ForecastInterval._12 => 12,
-            ForecastInterval._18 => 18,
-            _ => throw new ArgumentOutOfRangeException(nameof(Interval), Interval, null)
-        })
-        .InUtc()
-        .ToInstant();
-}
-
-public enum ForecastInterval
-{
-    _00 = 1,
-    _06 = 2,
-    _12 = 3,
-    _18 = 4,
-}
-
-public static class ForecastIntervalExtensions
-{
-    public static string Format(this ForecastInterval interval)
-    {
-        return interval switch
-        {
-            ForecastInterval._00 => "00",
-            ForecastInterval._06 => "06",
-            ForecastInterval._12 => "12",
-            ForecastInterval._18 => "18",
-            _ => throw new ArgumentOutOfRangeException(nameof(interval), interval, null)
-        };
-    }
-}
-
 public class GFSDataProvider(
     HttpClient client,
     IMemoryCache memoryCache,
@@ -71,34 +16,66 @@ public class GFSDataProvider(
 
     public async Task<Wind> GetWind(
         Instant instant,
-        double latitude,
-        double longitude,
+        WindLevel windLevel,
+        BoundingBox boundingBox,
         CancellationToken cancellationToken)
     {
+        if (windLevel != WindLevel.M10)
+        {
+            throw new NotImplementedException("Only M10 levels are supported");
+        }
+
         var latest = await forecastCycleProvider.GetLatestForecastCycle(cancellationToken);
         var date = Pattern.Format(latest.Date);
         var interval = latest.Interval.Format();
 
         var offset = (int)(instant - latest.ToInstant()).TotalHours;
-        if (offset < 0)
+        if (offset < 0 || (offset > 120 && offset % 3 != 0) || offset > 384)
         {
-            throw new ArgumentException($"{nameof(instant)} ({instant:O}) can't be _before_ the latest earliest forecast cycle ({latest.ToInstant():O})", nameof(instant));
+            throw new ArgumentException($"{nameof(instant)} ({instant:O}) can't be _before_ the latest earliest forecast cycle ({latest.ToInstant():O}) or must match with the forecast offsets (0->120, 123..3..384)", nameof(instant));
         }
-
-        // TODO: verify offset (less than 180 and at specific 3 hour after X hours).
 
         var url = $"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.{date}%2F{interval}%2Fatmos&file=gfs.t{interval}z.pgrb2.0p25.f{offset:000}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on";
 
+        // expire it one hour after the forecast is "past".
         var expiration = latest
             .ToInstant()
             .Plus(Duration.FromHours(offset + 1));
 
         var data = await GetForecastData(url, expiration, cancellationToken);
 
-        var (px, py) = LatLonToPixel(latitude, longitude);
-        var pIdx = py * 1440 + px;
+        var imageWidth = 1440;
+        var (topLeftX, topLeftY) = LatLonToPixel(boundingBox.NorthWest.Latitude, boundingBox.NorthWest.Longitude);
+        var (bottomRightX, bottomRightY) = LatLonToPixel(boundingBox.SouthEast.Latitude, boundingBox.SouthEast.Longitude);
 
-        return data.Wind[pIdx];
+        // Ensure the pixel coordinates are within the image boundaries and ordered correctly
+        var startX = Math.Min(topLeftX, bottomRightX);
+        var endX = Math.Max(topLeftX, bottomRightX);
+        var startY = Math.Min(topLeftY, bottomRightY);
+        var endY = Math.Max(topLeftY, bottomRightY);
+
+        var sumU = 0F;
+        var sumV = 0F;
+        var count = 0;
+
+        for (var y = startY; y <= endY; y++)
+        {
+            for (var x = startX; x <= endX; x++)
+            {
+                var index = y * imageWidth + x;
+                var pixelValue = data.Wind[index];
+                sumU += pixelValue.U;
+                sumV += pixelValue.V;
+                count++;
+            }
+        }
+
+
+        return new Wind()
+        {
+            U = sumU / count,
+            V = sumV / count,
+        };
     }
 
     private async Task<GFSForecastData> GetForecastData(string url, Instant expiration, CancellationToken cancellationToken)
@@ -131,14 +108,11 @@ public class GFSDataProvider(
                 .Zip(reader.ReadDataSetValues(dataSets[1]))
                 .Select(i => new Wind
                 {
-                    CoordinateA = i.First.Key,
-                    CoordinateB = i.Second.Key,
                     U = i.First.Value ?? 0,
                     V = i.Second.Value ?? 0,
                 })
                 .ToArray();
 
-            // expire it one hour after the forecast is "past".
             var absoluteExpiration = expiration.ToDateTimeOffset();
 
             data = new GFSForecastData
@@ -169,17 +143,4 @@ public class GFSDataProvider(
 
         return (x, y);
     }
-}
-
-public struct Wind
-{
-    public required Coordinate CoordinateA { get; init; }
-    public required Coordinate CoordinateB { get; init; }
-    public required float V { get; init; }
-    public required float U { get; init; }
-}
-
-public class GFSForecastData
-{
-    public required Wind[] Wind { get; init; }
 }

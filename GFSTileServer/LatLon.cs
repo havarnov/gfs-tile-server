@@ -1,0 +1,7 @@
+namespace GFSTileServer;
+
+public class LatLon
+{
+    public required double Latitude { get; init; }
+    public required double Longitude { get; init; }
+}
