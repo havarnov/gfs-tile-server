@@ -7,7 +7,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services
     .AddControllers(options =>
         options.OutputFormatters.Insert(0, new VectorTileFormatter()));
-
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policyBuilder =>
+    {
+        policyBuilder
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+    });
+});
 
 builder.Services.AddSingleton<IClock>(_ => SystemClock.Instance);
 builder.Services.AddHttpClient();
@@ -32,6 +41,8 @@ app.UseExceptionHandler(exceptionHandlerApp =>
 });
 
 app.UseRouting();
+
+app.UseCors();
 
 app.MapControllers();
 
