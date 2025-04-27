@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 using NGrib;
 using NodaTime;
@@ -66,6 +67,7 @@ public class GFSDataProvider(
     GFSLatestForecastCycleProvider forecastCycleProvider)
 {
     private static readonly LocalDatePattern Pattern = LocalDatePattern.CreateWithInvariantCulture("yyyyMMdd");
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
 
     public async Task<Wind> GetWind(
         Instant instant,
@@ -87,49 +89,74 @@ public class GFSDataProvider(
 
         var url = $"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.{date}%2F{interval}%2Fatmos&file=gfs.t{interval}z.pgrb2.0p25.f{offset:000}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on";
 
-        var data = await memoryCache.GetOrCreateAsync(
-            url,
-            async entry =>
-            {
-                await using var stream = await client.GetStreamAsync(
-                    new Uri(url),
-                    cancellationToken);
-                await using var memoryStream = new MemoryStream();
-                await stream.CopyToAsync(memoryStream, cancellationToken);
+        var expiration = latest
+            .ToInstant()
+            .Plus(Duration.FromHours(offset + 1));
 
-                using var reader = new NGrib.Grib2Reader(memoryStream);
-                var dataSets = reader.ReadAllDataSets().ToList();
-                Wind[] wind = reader.ReadDataSetValues(dataSets[0])
-                    .Zip(reader.ReadDataSetValues(dataSets[1]))
-                    .Select(i => new Wind
-                    {
-                        CoordinateA = i.First.Key,
-                        CoordinateB = i.Second.Key,
-                        U = i.First.Value ?? 0,
-                        V = i.Second.Value ?? 0,
-                    })
-                    .ToArray();
-
-                // expire it one hour after the forecast is "past".
-                entry.AbsoluteExpiration = latest.ToInstant()
-                    .Plus(Duration.FromHours(offset + 1))
-                    .ToDateTimeOffset();
-
-                return new GFSForecastData
-                {
-                    Wind = wind,
-                };
-            });
-
-        if (data is null)
-        {
-            throw new InvalidOperationException("Cache returned null.");
-        }
+        var data = await GetForecastData(url, expiration, cancellationToken);
 
         var (px, py) = LatLonToPixel(latitude, longitude);
         var pIdx = py * 1440 + px;
 
         return data.Wind[pIdx];
+    }
+
+    private async Task<GFSForecastData> GetForecastData(string url, Instant expiration, CancellationToken cancellationToken)
+    {
+        var data = memoryCache.Get<GFSForecastData>(url);
+        if (data is not null)
+        {
+            return data;
+        }
+
+        var semaphore = Locks.GetOrAdd(url, _ => new SemaphoreSlim(1, 1));
+        await semaphore.WaitAsync(cancellationToken);
+        try
+        {
+            data = memoryCache.Get<GFSForecastData>(url);
+            if (data is not null)
+            {
+                return data;
+            }
+
+            await using var stream = await client.GetStreamAsync(
+                new Uri(url),
+                cancellationToken);
+            await using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream, cancellationToken);
+
+            using var reader = new Grib2Reader(memoryStream);
+            var dataSets = reader.ReadAllDataSets().ToList();
+            Wind[] wind = reader.ReadDataSetValues(dataSets[0])
+                .Zip(reader.ReadDataSetValues(dataSets[1]))
+                .Select(i => new Wind
+                {
+                    CoordinateA = i.First.Key,
+                    CoordinateB = i.Second.Key,
+                    U = i.First.Value ?? 0,
+                    V = i.Second.Value ?? 0,
+                })
+                .ToArray();
+
+            // expire it one hour after the forecast is "past".
+            var absoluteExpiration = expiration.ToDateTimeOffset();
+
+            data = new GFSForecastData
+            {
+                Wind = wind,
+            };
+
+            memoryCache.Set(url, data, absoluteExpiration);
+            return data;
+        }
+        finally
+        {
+            semaphore.Release();
+            if (Locks.TryGetValue(url, out var s) && s.CurrentCount > 0)
+            {
+                Locks.TryRemove(url, out _);
+            }
+        }
     }
 
     private static (int x, int y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 721)
