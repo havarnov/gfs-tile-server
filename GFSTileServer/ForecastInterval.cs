@@ -1,6 +1,8 @@
+using System;
+
 namespace GFSTileServer;
 
-public enum ForecastInterval
+internal enum ForecastInterval
 {
     _00 = 1,
     _06 = 2,
@@ -8,7 +10,7 @@ public enum ForecastInterval
     _18 = 4,
 }
 
-public static class ForecastIntervalExtensions
+internal static class ForecastIntervalExtensions
 {
     public static string Format(this ForecastInterval interval)
     {

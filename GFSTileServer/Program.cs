@@ -1,34 +1,36 @@
 using System.Net;
+
 using GFSTileServer;
+
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+
 using NodaTime;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services
-    .AddControllers(options =>
+    .AddControllers(static options =>
         options.OutputFormatters.Insert(0, new VectorTileFormatter()));
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policyBuilder =>
-    {
-        policyBuilder
-            .AllowAnyOrigin()
-            .AllowAnyMethod()
-            .AllowAnyHeader();
-    });
-});
+builder.Services.AddCors(static options =>
+    options
+        .AddDefaultPolicy(static policyBuilder =>
+            policyBuilder
+                .AllowAnyOrigin()
+                .AllowAnyMethod()
+                .AllowAnyHeader()));
 
-builder.Services.AddSingleton<IClock>(_ => SystemClock.Instance);
+builder.Services.AddSingleton<IClock>(static _ => SystemClock.Instance);
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<GFSLatestForecastCycleProvider>();
-builder.Services.AddSingleton<GFSDataProvider>();
+builder.Services.AddSingleton<IGFSDataProvider, GFSDataProvider>();
 
 var app = builder.Build();
 
-app.UseExceptionHandler(exceptionHandlerApp =>
-{
-    exceptionHandlerApp.Run(async context =>
+app.UseExceptionHandler(static exceptionHandlerApp => exceptionHandlerApp
+    .Run(static async context =>
     {
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
 
@@ -37,8 +39,7 @@ app.UseExceptionHandler(exceptionHandlerApp =>
             StatusCode = HttpStatusCode.InternalServerError,
             Message = "Internal server error."
         });
-    });
-});
+    }));
 
 app.UseRouting();
 

@@ -1,15 +1,44 @@
+using System;
 using System.Collections.Concurrent;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+
 using Microsoft.Extensions.Caching.Memory;
+
 using NGrib;
+
 using NodaTime;
 using NodaTime.Text;
 
 namespace GFSTileServer;
 
-public class GFSDataProvider(
+/// <summary>
+/// A provider of GFS data.
+/// </summary>
+public interface IGFSDataProvider
+{
+    /// <summary>
+    /// This method returns GFS wind data for the provided instant, level and bounding box.
+    /// </summary>
+    /// <param name="instant">The instant to get wind forecast for.</param>
+    /// <param name="windLevel">The atmosphere level to get wind forecast for.</param>
+    /// <param name="boundingBox">The bounding box to get wind forecast for.</param>
+    /// <param name="cancellationToken">Cancellation token to cancel any internal async operations.</param>
+    /// <returns>A <see cref="Wind"/> that holds averaged wind data for the specified input.</returns>
+    Task<Wind> GetWind(
+        Instant instant,
+        WindLevel windLevel,
+        BoundingBox boundingBox,
+        CancellationToken cancellationToken);
+}
+
+internal class GFSDataProvider(
     HttpClient client,
     IMemoryCache memoryCache,
-    GFSLatestForecastCycleProvider forecastCycleProvider)
+    GFSLatestForecastCycleProvider forecastCycleProvider) : IGFSDataProvider
 {
     private static readonly LocalDatePattern Pattern = LocalDatePattern.CreateWithInvariantCulture("yyyyMMdd");
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
@@ -62,7 +91,7 @@ public class GFSDataProvider(
         {
             for (var x = startX; x <= endX; x++)
             {
-                var index = y * imageWidth + x;
+                var index = (y * imageWidth) + x;
                 var pixelValue = data.Wind[index];
                 sumU += pixelValue.U;
                 sumV += pixelValue.V;
@@ -104,7 +133,7 @@ public class GFSDataProvider(
 
             using var reader = new Grib2Reader(memoryStream);
             var dataSets = reader.ReadAllDataSets().ToList();
-            Wind[] wind = reader.ReadDataSetValues(dataSets[0])
+            var wind = reader.ReadDataSetValues(dataSets[0])
                 .Zip(reader.ReadDataSetValues(dataSets[1]))
                 .Select(i => new Wind
                 {
@@ -120,15 +149,15 @@ public class GFSDataProvider(
                 Wind = wind,
             };
 
-            memoryCache.Set(url, data, absoluteExpiration);
+            _ = memoryCache.Set(url, data, absoluteExpiration);
             return data;
         }
         finally
         {
-            semaphore.Release();
+            _ = semaphore.Release();
             if (Locks.TryGetValue(url, out var s) && s.CurrentCount > 0)
             {
-                Locks.TryRemove(url, out _);
+                _ = Locks.TryRemove(url, out _);
             }
         }
     }
@@ -136,10 +165,10 @@ public class GFSDataProvider(
     private static (int x, int y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 721)
     {
         // Latitude mapping
-        int y = (int)((90 - latitude) * (imageHeight / 180.0));
+        var y = (int)((90 - latitude) * (imageHeight / 180.0));
 
         // Longitude mapping
-        int x = 720 + (int)((longitude + 180) * (imageWidth / 360.0));
+        var x = 720 + (int)((longitude + 180) * (imageWidth / 360.0));
 
         return (x, y);
     }

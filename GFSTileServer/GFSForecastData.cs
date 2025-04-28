@@ -1,6 +1,6 @@
 namespace GFSTileServer;
 
-public class GFSForecastData
+internal class GFSForecastData
 {
     public required Wind[] Wind { get; init; }
 }

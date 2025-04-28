@@ -1,10 +1,15 @@
+using System;
+using System.IO;
+using System.Threading.Tasks;
+
 using Microsoft.AspNetCore.Mvc.Formatters;
+
 using NetTopologySuite.IO.VectorTiles;
 using NetTopologySuite.IO.VectorTiles.Mapbox;
 
 namespace GFSTileServer;
 
-public class VectorTileFormatter : OutputFormatter
+internal class VectorTileFormatter : OutputFormatter
 {
     public VectorTileFormatter()
     {
@@ -31,5 +36,8 @@ public class VectorTileFormatter : OutputFormatter
         return Task.CompletedTask;
     }
 
-    protected override bool CanWriteType(Type? type) => typeof(VectorTile).IsAssignableFrom(type);
+    protected override bool CanWriteType(Type? type)
+    {
+        return typeof(VectorTile).IsAssignableFrom(type);
+    }
 }

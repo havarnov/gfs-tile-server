@@ -1,17 +1,41 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
 using Microsoft.AspNetCore.Mvc;
+
 using NetTopologySuite.Features;
 using NetTopologySuite.Geometries;
 using NetTopologySuite.IO.VectorTiles;
+
 using NodaTime;
+
 using Tile = NetTopologySuite.IO.VectorTiles.Tiles.Tile;
 
 namespace GFSTileServer;
 
+/// <summary>
+/// Creates tiles dynamically from GFS model data.
+/// </summary>
 [ApiController]
 public class TileController(
     IClock clock,
-    GFSDataProvider dataProvider) : ControllerBase
+    IGFSDataProvider dataProvider)
+    : ControllerBase
 {
+
+    /// <summary>
+    ///
+    /// </summary>
+    /// <param name="forecastInstant"></param>
+    /// <param name="level"></param>
+    /// <param name="x"></param>
+    /// <param name="y"></param>
+    /// <param name="zoom"></param>
+    /// <param name="cancellationToken"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentOutOfRangeException"></exception>
     [HttpGet("tiles/gfs/{forecastInstant}/wind/{level}/{x}/{y}/{zoom}")]
     public async Task<IActionResult> GetTile(
         [FromRoute] Instant forecastInstant,
@@ -34,13 +58,12 @@ public class TileController(
         var vt = new VectorTile { TileId = tileDefinition.Id, };
         var lyr = new Layer { Name = "testing" };
 
-        var center = TileCenterToLonLat(x, y, zoom);
         var boundingBox = BoundingBox.From(x, y, zoom);
         var wind = await dataProvider.GetWind(forecastInstant, level, boundingBox, cancellationToken);
 
         lyr.Features.Add(
             new Feature(
-                new Point(center.Longitude, center.Latitude),
+                new Point(boundingBox.Center.Longitude, boundingBox.Center.Latitude),
                 new AttributesTable(new Dictionary<string, object>()
                 {
                     { "u", wind.U },
@@ -51,21 +74,4 @@ public class TileController(
         return Ok(vt);
     }
 
-    private static LatLon TileCenterToLonLat(int x, int y, int z)
-    {
-        var n = Math.Pow(2.0, z);
-
-        // Calculate the longitude of the center
-        var lonDeg = ((x + 0.5) / n) * 360.0 - 180.0;
-
-        // Calculate the latitude of the center
-        var latRad = Math.Atan(Math.Sinh(Math.PI * (1 - 2 * (y + 0.5) / n)));
-        var latDeg = latRad * 180.0 / Math.PI;
-
-        return new LatLon()
-        {
-            Latitude = latDeg,
-            Longitude = lonDeg,
-        };
-    }
 }
