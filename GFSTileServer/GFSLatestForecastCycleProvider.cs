@@ -5,17 +5,49 @@ using NodaTime;
 
 namespace GFSTileServer;
 
-internal class GFSLatestForecastCycleProvider
+internal class GFSLatestForecastCycleProvider(IClock clock)
 {
 #pragma warning disable IDE0060
-    public async Task<ForecastCycle> GetLatestForecastCycle(CancellationToken cancellationToken)
+    public Task<ForecastCycle> GetLatestForecastCycle(CancellationToken cancellationToken)
 #pragma warning restore IDE0060
     {
-        await Task.CompletedTask;
-        return new ForecastCycle
+        var nowUtc = clock.GetCurrentInstant().InUtc();
+        var timeOfDayUtc = nowUtc.LocalDateTime.TimeOfDay;
+
+        ForecastCycle forecastCycle;
+        if (timeOfDayUtc > new LocalTime(18, 00))
         {
-            Date = new LocalDate(2025, 04, 26),
-            Interval = ForecastInterval._12,
-        };
+            forecastCycle = new ForecastCycle
+            {
+                Date = nowUtc.Date,
+                Interval = ForecastInterval._12,
+            };
+        }
+        else if (timeOfDayUtc > new LocalTime(12, 00))
+        {
+            forecastCycle = new ForecastCycle
+            {
+                Date = nowUtc.Date,
+                Interval = ForecastInterval._06,
+            };
+        }
+        else if (timeOfDayUtc > new LocalTime(06, 00))
+        {
+            forecastCycle = new ForecastCycle
+            {
+                Date = nowUtc.Date,
+                Interval = ForecastInterval._00,
+            };
+        }
+        else
+        {
+            forecastCycle = new ForecastCycle
+            {
+                Date = nowUtc.Date.Minus(Period.FromDays(1)),
+                Interval = ForecastInterval._18,
+            };
+        }
+
+        return Task.FromResult(forecastCycle);
     }
 }

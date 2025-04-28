@@ -8,6 +8,10 @@ indent_style = space
 [*.xml]
 indent_size = 2
 
+[*.{cs,vb}]
+// dotnet_style_prefer_conditional_expression_over_assignment
+dotnet_diagnostic.IDE0045.severity = none
+
 # C# files
 [*.cs]
 
