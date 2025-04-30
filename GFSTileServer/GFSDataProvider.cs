@@ -162,13 +162,22 @@ internal class GFSDataProvider(
         }
     }
 
-    private static (int x, int y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 721)
+    private static (int x, int y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 720)
     {
         // Latitude mapping
         var y = (int)((90 - latitude) * (imageHeight / 180.0));
 
         // Longitude mapping
-        var x = 720 + (int)((longitude + 180) * (imageWidth / 360.0));
+        int x;
+        if (longitude < 0)
+        {
+            x = (int)(720 + ((1 - (longitude / -180)) * 720));
+
+        }
+        else
+        {
+            x = (int)(longitude * (imageWidth / 360.0));
+        }
 
         return (x, y);
     }
