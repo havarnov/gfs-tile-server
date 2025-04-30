@@ -171,8 +171,7 @@ internal class GFSDataProvider(
         int x;
         if (longitude < 0)
         {
-            x = (int)(imageWidth + ((1 - (longitude / -180)) * imageWidth));
-
+            x = (int)((imageWidth / 2.0) + ((1 - (longitude / -180)) * (imageWidth / 2.0)));
         }
         else
         {
