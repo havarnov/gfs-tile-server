@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -76,29 +77,96 @@ internal class GFSDataProvider(
         var imageWidth = 1440;
         var (topLeftX, topLeftY) = LatLonToPixel(boundingBox.NorthWest.Latitude, boundingBox.NorthWest.Longitude);
         var (bottomRightX, bottomRightY) = LatLonToPixel(boundingBox.SouthEast.Latitude, boundingBox.SouthEast.Longitude);
+        var (centerX, centerY) = LatLonToPixel(boundingBox.Center.Latitude, boundingBox.Center.Longitude);
 
         // Ensure the pixel coordinates are within the image boundaries and ordered correctly
-        var startX = Math.Min(topLeftX, bottomRightX);
-        var endX = Math.Max(topLeftX, bottomRightX);
-        var startY = Math.Min(topLeftY, bottomRightY);
-        var endY = Math.Max(topLeftY, bottomRightY);
+        var startX = (int)Math.Floor(Math.Min(topLeftX, bottomRightX));
+        var endX = (int)Math.Ceiling(Math.Max(topLeftX, bottomRightX));
+        var startY = (int)Math.Floor(Math.Min(topLeftY, bottomRightY));
+        var endY = (int)Math.Ceiling(Math.Max(topLeftY, bottomRightY));
 
         var sumU = 0F;
         var sumV = 0F;
         var count = 0;
 
-        for (var y = startY; y <= endY; y++)
+        List<double> u = [];
+        List<double> v = [];
+
+        int[] ys = [.. Range((int)Math.Floor(topLeftY), (int)Math.Ceiling(bottomRightY), 720)];
+        int[] xs = [.. Range((int)Math.Floor(topLeftX), (int)Math.Ceiling(bottomRightX), 1440)];
+        // for (var y = startY; y <= endY; y++)
+        // foreach (var y in Range((int)Math.Floor(topLeftY), (int)Math.Ceiling(bottomRightY), 720))
+        foreach (var y in ys)
         {
-            for (var x = startX; x <= endX; x++)
+            // for (var x = startX; x <= endX; x++)
+            // foreach (var x in Range((int)Math.Floor(topLeftX), (int)Math.Ceiling(bottomRightX), 1440))
+            foreach (var x in xs)
             {
                 var index = (y * imageWidth) + x;
                 var pixelValue = data.Wind[index];
                 sumU += pixelValue.U;
                 sumV += pixelValue.V;
                 count++;
+
+                u.Add(pixelValue.U);
+                v.Add(pixelValue.V);
             }
         }
 
+        try
+        {
+            // double[] x = [.. Enumerable.Range(startX, endX - startX + 1).Select(i => (double)i)];
+            // double[] y = [.. Enumerable.Range(startY, endY - startY + 1).Select(i => (double)i)];
+            double[] x = [.. xs.Select(i => (double)i)];
+            double[] y = [.. ys.Select(i => (double)i)];
+            alglib.spline2dbuildbicubicv(
+                x,
+                x.Length,
+                y,
+                y.Length,
+                [.. u],
+                1,
+                out var spline2dInterpolantU);
+
+            var uInterpolated = alglib.spline2dcalc(
+                spline2dInterpolantU,
+                centerX,
+                centerY);
+
+            alglib.spline2dbuildbicubicv(
+                x,
+                x.Length,
+                y,
+                y.Length,
+                [.. v],
+                1,
+                out var spline2dInterpolantV);
+
+            var vInterpolated = alglib.spline2dcalc(
+                spline2dInterpolantV,
+                centerX,
+                centerY);
+
+            if (Math.Abs((sumU / count) - uInterpolated) > 10)
+            {
+                Console.WriteLine($"U: {sumU / count}, V: {uInterpolated}, {Math.Abs((sumU / count) - uInterpolated)}");
+                Console.WriteLine($"V: {sumV / count}, V: {vInterpolated}, {Math.Abs((sumV / count) - vInterpolated)}");
+            }
+            return new Wind()
+            {
+                U = (float)uInterpolated,
+                V = (float)vInterpolated,
+            };
+            // return new Wind()
+            // {
+            //     U = sumU / count,
+            //     V = sumV / count,
+            // };
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("NOOP: " + e.Message);
+        }
 
         return new Wind()
         {
@@ -162,22 +230,43 @@ internal class GFSDataProvider(
         }
     }
 
-    private static (int x, int y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 720)
+    private static (double x, double y) LatLonToPixel(double latitude, double longitude, int imageWidth = 1440, int imageHeight = 720)
     {
         // Latitude mapping
-        var y = (int)((90 - latitude) * (imageHeight / 180.0));
+        var y = (90 - latitude) * (imageHeight / 180.0);
 
         // Longitude mapping
-        int x;
+        double x;
         if (longitude < 0)
         {
-            x = (int)((imageWidth / 2.0) + ((1 - (longitude / -180)) * (imageWidth / 2.0)));
+            x = (imageWidth / 2.0) + ((1 - (longitude / -180)) * (imageWidth / 2.0));
         }
         else
         {
-            x = (int)(longitude * (imageWidth / 360.0));
+            x = longitude * (imageWidth / 360.0);
         }
 
         return (x, y);
+    }
+
+    private static IEnumerable<int> Range(int start, int end, int wrap)
+    {
+        while (true)
+        {
+            yield return start;
+
+            start += 1;
+
+            if (start > wrap)
+            {
+                start = 0;
+            }
+
+            if (start == end)
+            {
+                yield return start;
+                break;
+            }
+        }
     }
 }
