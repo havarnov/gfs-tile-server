@@ -24,9 +24,8 @@ public class TileController(
     IGFSDataProvider dataProvider)
     : ControllerBase
 {
-
     /// <summary>
-    ///
+    /// Get vector tiles with wind data.
     /// </summary>
     /// <param name="forecastInstant"></param>
     /// <param name="level"></param>
@@ -74,4 +73,35 @@ public class TileController(
         return Ok(vt);
     }
 
+    /// <summary>
+    /// Get wind data for the specified position.
+    /// </summary>
+    /// <param name="forecastInstant"></param>
+    /// <param name="level"></param>
+    /// <param name="latitude"></param>
+    /// <param name="longitude"></param>
+    /// <param name="cancellationToken"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentOutOfRangeException"></exception>
+    [HttpGet("position/gfs/{forecastInstant}/wind/{level}/{latitude}/{longitude}")]
+    public async Task<IActionResult> GetPosition(
+        [FromRoute] Instant forecastInstant,
+        [FromRoute] WindLevel level,
+        [FromRoute] double latitude,
+        [FromRoute] double longitude,
+        CancellationToken cancellationToken = default)
+    {
+
+        var nowUtc = clock.GetCurrentInstant().InUtc();
+        var startOfCurrentHourUtc = new LocalDateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0);
+        var forecastUtc = forecastInstant.InUtc();
+        if (forecastUtc.LocalDateTime < startOfCurrentHourUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(forecastInstant), forecastInstant, "forecastInstant must be after the start of the current hour.");
+        }
+
+        var wind = await dataProvider.GetWind(forecastInstant, level, new LatLon() { Latitude = latitude, Longitude = longitude, }, cancellationToken);
+
+        return Ok(wind);
+    }
 }
