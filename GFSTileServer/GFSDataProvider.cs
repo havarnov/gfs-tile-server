@@ -88,46 +88,9 @@ internal class GFSDataProvider(
 
         var data = await GetForecastData(url, expiration, cancellationToken);
 
-        var imageWidth = 1440;
-        var (pixelX, pixelY) = LatLonToPixel(latLon.Latitude, latLon.Longitude);
+        var wind = WeightedAvgWind(latLon, data);
 
-        List<double> values = [];
-
-        int[] ys = [.. Range((int)Math.Floor(pixelY), (int)Math.Ceiling(pixelY), 720)];
-        int[] xs = [.. Range((int)Math.Floor(pixelX), (int)Math.Ceiling(pixelX), 1440)];
-
-        foreach (var y in ys)
-        {
-            foreach (var x in xs)
-            {
-                var index = (y * imageWidth) + x;
-                var pixelValue = data.Wind[index];
-
-                values.Add(pixelValue.U);
-                values.Add(pixelValue.V);
-            }
-        }
-
-        alglib.spline2dbuildbicubicv(
-            [.. xs.Select(i => (double)i)],
-            xs.Length,
-            [.. ys.Select(i => (double)i)],
-            ys.Length,
-            [.. values],
-            2,
-            out var spline2dInterpolantVector);
-
-        alglib.spline2dcalcv(
-            spline2dInterpolantVector,
-            pixelX,
-            pixelY,
-            out var interpolated);
-
-        return new Wind()
-        {
-            U = (float)interpolated[0],
-            V = (float)interpolated[1],
-        };
+        return wind;
     }
 
     public async Task<Wind> GetWind(
@@ -161,15 +124,20 @@ internal class GFSDataProvider(
         var data = await GetForecastData(url, expiration, cancellationToken);
 
         var imageWidth = 1440;
+
         var (topLeftX, topLeftY) = LatLonToPixel(boundingBox.NorthWest.Latitude, boundingBox.NorthWest.Longitude);
         var (bottomRightX, bottomRightY) = LatLonToPixel(boundingBox.SouthEast.Latitude, boundingBox.SouthEast.Longitude);
 
         List<double> u = [];
         List<double> v = [];
-        List<double> values = [];
 
         int[] ys = [.. Range((int)Math.Floor(topLeftY), (int)Math.Ceiling(bottomRightY), 720)];
         int[] xs = [.. Range((int)Math.Floor(topLeftX), (int)Math.Ceiling(bottomRightX), 1440)];
+
+        if (ys.Length == 2 && xs.Length == 2)
+        {
+            return WeightedAvgWind(boundingBox.Center, data);
+        }
 
         foreach (var y in ys)
         {
@@ -180,30 +148,7 @@ internal class GFSDataProvider(
 
                 u.Add(pixelValue.U);
                 v.Add(pixelValue.V);
-                values.Add(pixelValue.U);
-                values.Add(pixelValue.V);
             }
-        }
-
-        if (values.Count <= 8)
-        {
-            var (pixelX, pixelY) = LatLonToPixel(boundingBox.Center.Latitude, boundingBox.Center.Longitude);
-            alglib.spline2dbuildbicubicv(
-                [.. xs.Select(i => (double)i)],
-                xs.Length,
-                [.. ys.Select(i => (double)i)],
-                ys.Length,
-                [.. values],
-                2,
-                out var spline2dInterpolantVector);
-
-            alglib.spline2dcalcv(
-                spline2dInterpolantVector,
-                pixelX,
-                pixelY,
-                out var interpolated);
-
-            return new Wind() { U = (float)interpolated[0], V = (float)interpolated[1], };
         }
 
         return new Wind()
@@ -211,6 +156,52 @@ internal class GFSDataProvider(
             U = (float)u.Average(),
             V = (float)v.Average(),
         };
+    }
+
+    private static Wind WeightedAvgWind(
+        LatLon latLon,
+        GFSForecastData data)
+    {
+        var imageWidth = 1440;
+
+        var (pixelX, pixelY) = LatLonToPixel(latLon.Latitude, latLon.Longitude);
+
+        var yF = Math.Floor(pixelY);
+        var yC = Math.Ceiling(pixelY);
+        var xF = Math.Floor(pixelX);
+        var xC = Math.Ceiling(pixelX);
+
+        var lenBottomLeft = 1d / Math.Sqrt(Math.Pow(pixelX - xF, 2) + Math.Pow(pixelY - yF, 2));
+        var lenTopLeft = 1d / Math.Sqrt(Math.Pow(pixelX - xF, 2) + Math.Pow(pixelY - yC, 2));
+        var lenTopRight = 1d / Math.Sqrt(Math.Pow(pixelX - xC, 2) + Math.Pow(pixelY - yC, 2));
+        var lenBottomRight = 1d / Math.Sqrt(Math.Pow(pixelX - xC, 2) + Math.Pow(pixelY - yF, 2));
+        var totalLen = lenBottomLeft + lenTopLeft + lenTopRight + lenBottomRight;
+
+        var weightBottomLeft = (float)(lenBottomLeft / totalLen);
+        var weightTopLeft = (float)(lenTopLeft / totalLen);
+        var weightTopRight = (float)(lenTopRight / totalLen);
+        var weightBottomRight = (float)(lenBottomRight / totalLen);
+
+        var weightedAvgU = 0F;
+        var weightedAvgV = 0F;
+
+        var bottomLeft = data.Wind[(((int)yF) * imageWidth) + (int)xF];
+        weightedAvgU += bottomLeft.U * weightBottomLeft;
+        weightedAvgV += bottomLeft.V * weightBottomLeft;
+
+        var topLeft = data.Wind[(((int)yC) * imageWidth) + (int)xF];
+        weightedAvgU += topLeft.U * weightTopLeft;
+        weightedAvgV += topLeft.V * weightTopLeft;
+
+        var topRight = data.Wind[(((int)yC) * imageWidth) + (int)xC];
+        weightedAvgU += topRight.U * weightTopRight;
+        weightedAvgV += topRight.V * weightTopLeft;
+
+        var bottomRight = data.Wind[(((int)yF) * imageWidth) + (int)xC];
+        weightedAvgU += bottomRight.U * weightBottomRight;
+        weightedAvgV += bottomRight.V * weightBottomRight;
+
+        return new Wind() { U = weightedAvgU, V = weightedAvgV, };
     }
 
     private async Task<GFSForecastData> GetForecastData(string url, Instant expiration, CancellationToken cancellationToken)
@@ -241,11 +232,7 @@ internal class GFSDataProvider(
             var dataSets = reader.ReadAllDataSets().ToList();
             var wind = reader.ReadDataSetValues(dataSets[0])
                 .Zip(reader.ReadDataSetValues(dataSets[1]))
-                .Select(i => new Wind
-                {
-                    U = i.First.Value ?? 0,
-                    V = i.Second.Value ?? 0,
-                })
+                .Select(i => new Wind { U = i.First.Value ?? 0, V = i.Second.Value ?? 0, })
                 .ToArray();
 
             var absoluteExpiration = expiration.ToDateTimeOffset();
