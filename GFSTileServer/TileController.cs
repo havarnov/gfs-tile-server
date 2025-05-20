@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -103,5 +104,31 @@ public class TileController(
         var wind = await dataProvider.GetWind(forecastInstant, level, new LatLon() { Latitude = latitude, Longitude = longitude, }, cancellationToken);
 
         return Ok(wind);
+    }
+
+    /// <summary>
+    /// Get png wind image for.
+    /// </summary>
+    [HttpGet("png/gfs/{forecastInstant}/wind/{level}")]
+    public async Task<IActionResult> GetPosition(
+        [FromRoute] Instant forecastInstant,
+        [FromRoute] WindLevel level,
+        CancellationToken cancellationToken = default)
+    {
+        var nowUtc = clock.GetCurrentInstant().InUtc();
+        var startOfCurrentHourUtc = new LocalDateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0);
+        var forecastUtc = forecastInstant.InUtc();
+        if (forecastUtc.LocalDateTime < startOfCurrentHourUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(forecastInstant), forecastInstant, "forecastInstant must be after the start of the current hour.");
+        }
+
+        var wind = await dataProvider.GetWindPng(forecastInstant, level, cancellationToken);
+
+        Response.Headers["MaxU"] = wind.MaxU.ToString("R", CultureInfo.InvariantCulture);
+        Response.Headers["MinU"] = wind.MinU.ToString("R", CultureInfo.InvariantCulture);
+        Response.Headers["MaxV"] = wind.MaxV.ToString("R", CultureInfo.InvariantCulture);
+        Response.Headers["MinV"] = wind.MinV.ToString("R", CultureInfo.InvariantCulture);
+        return new FileContentResult(wind.ImageData, "image/png");
     }
 }

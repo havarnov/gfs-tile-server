@@ -19,7 +19,8 @@ builder.Services.AddCors(static options =>
             policyBuilder
                 .AllowAnyOrigin()
                 .AllowAnyMethod()
-                .AllowAnyHeader()));
+                .AllowAnyHeader()
+                .WithExposedHeaders("*")));
 
 builder.Services.AddSingleton<IClock>(static _ => SystemClock.Instance);
 builder.Services.AddHttpClient();

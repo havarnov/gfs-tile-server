@@ -14,6 +14,10 @@ using NGrib;
 using NodaTime;
 using NodaTime.Text;
 
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+
 namespace GFSTileServer;
 
 /// <summary>
@@ -48,6 +52,45 @@ public interface IGFSDataProvider
         WindLevel windLevel,
         LatLon latLon,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Get wind as an PNG image.
+    /// </summary>
+    Task<WindPngData> GetWindPng(
+        Instant instant,
+        WindLevel windLevel,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// WindPngData
+/// </summary>
+public class WindPngData
+{
+    /// <summary>
+    /// PNG image
+    /// </summary>
+    public required byte[] ImageData { get; init; }
+
+    /// <summary>
+    /// MaxU in the image data.
+    /// </summary>
+    public required double MaxU { get; init; }
+
+    /// <summary>
+    /// MinU in the image data.
+    /// </summary>
+    public required double MinU { get; init; }
+
+    /// <summary>
+    /// MaxV in the image data.
+    /// </summary>
+    public required double MaxV { get; init; }
+
+    /// <summary>
+    /// MinV in the image data.
+    /// </summary>
+    public required double MinV { get; init; }
 }
 
 internal class GFSDataProvider(
@@ -91,6 +134,35 @@ internal class GFSDataProvider(
         var wind = WeightedAvgWind(latLon, data);
 
         return wind;
+    }
+
+    public async Task<WindPngData> GetWindPng(Instant instant, WindLevel windLevel, CancellationToken cancellationToken)
+    {
+        if (windLevel != WindLevel.M10)
+        {
+            throw new NotImplementedException("Only M10 levels are supported");
+        }
+
+        var latest = await forecastCycleProvider.GetLatestForecastCycle(cancellationToken);
+        var date = Pattern.Format(latest.Date);
+        var interval = latest.Interval.Format();
+
+        var offset = (int)(instant - latest.ToInstant()).TotalHours;
+        if (offset < 0 || (offset > 120 && offset % 3 != 0) || offset > 384)
+        {
+            throw new ArgumentException($"{nameof(instant)} ({instant:O}) can't be _before_ the latest earliest forecast cycle ({latest.ToInstant():O}) or must match with the forecast offsets (0->120, 123..3..384)", nameof(instant));
+        }
+
+        var url = $"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?dir=%2Fgfs.{date}%2F{interval}%2Fatmos&file=gfs.t{interval}z.pgrb2.0p25.f{offset:000}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on";
+
+        // expire it one hour after the forecast is "past".
+        var expiration = latest
+            .ToInstant()
+            .Plus(Duration.FromHours(offset + 1));
+
+        var data = await GetForecastData(url, expiration, cancellationToken);
+
+        return data.WindPngData;
     }
 
     public async Task<Wind> GetWind(
@@ -237,9 +309,46 @@ internal class GFSDataProvider(
 
             var absoluteExpiration = expiration.ToDateTimeOffset();
 
+            var maxU = wind.Max(x => x.U);
+            var minU = wind.Min(x => x.U);
+            var deltaU = maxU - minU;
+            var maxV = wind.Max(x => x.V);
+            var minV = wind.Min(x => x.V);
+            var deltaV = maxV - minV;
+
+            using var image = new Image<Rgb24>(1440, 720);
+            image.ProcessPixelRows(pixelAccessor =>
+            {
+                for (var i = 0; i < 720; i++)
+                {
+                    var span = pixelAccessor.GetRowSpan(i);
+                    for (var j = 0; j < 1440; j++)
+                    {
+                        var current = j > 720
+                            ? wind[(i * 1440) + (j - 720)]
+                            : wind[(i * 1440) + j + 720];
+
+                        var uValue = (byte)((current.U - minU) / deltaU * 255);
+                        var vValue = (byte)((current.V - minV) / deltaV * 255);
+                        span[j] = new Rgb24(uValue, vValue, 0);
+                    }
+                }
+            });
+
+            await using var pngStream = new MemoryStream();
+            await image.SaveAsync(pngStream, PngFormat.Instance, cancellationToken);
+
             data = new GFSForecastData
             {
                 Wind = wind,
+                WindPngData = new WindPngData
+                {
+                    ImageData = pngStream.ToArray(),
+                    MaxU = maxU,
+                    MinU = minU,
+                    MaxV = maxV,
+                    MinV = minV
+                },
             };
 
             _ = memoryCache.Set(url, data, absoluteExpiration);
